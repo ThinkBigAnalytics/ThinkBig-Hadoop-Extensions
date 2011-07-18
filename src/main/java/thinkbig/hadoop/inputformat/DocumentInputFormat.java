@@ -2,30 +2,42 @@ package thinkbig.hadoop.inputformat;
 
 import java.io.*;
 import java.lang.reflect.Method;
-import java.nio.charset.Charset;
-
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.stream.*;
-import javax.xml.stream.events.XMLEvent;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.compress.*;
 import org.apache.hadoop.mapred.*;
 
-import thinkbig.hadoop.inputformat.XmlInputFormat.XmlRecordReader;
+/**
+ * This input format reads an entire file (typically a text document) and emits a single record per file. Useful for processing
+ * raw documents as a whole. The input key is the file path and the value is typically the contents of the document.
+ * 
+ * Set the parameter docinput.prepend.key to "true" to have the format prepend the key followed by a less than character (<)
+ * before the contents of the document as the value. This is mostly useful for Hive, which oddly won't expose keys as part of the
+ * data in a row.
+ * 
+ * @author rbodkin
+ * 
+ */
+@SuppressWarnings("deprecation")
+public class DocumentInputFormat extends FileInputFormat<Text,Text> implements JobConfigurable {
+    private boolean prependKey = false;
+    
+    @Override
+    public void configure(JobConf conf) {
+        String confStr = conf.get("docinput.prepend.key");
+        prependKey = "true".equalsIgnoreCase(confStr);
+    }
 
-public class DocumentInputFormat extends TextInputFormat {
     @Override
     protected boolean isSplitable(FileSystem fs, Path file) {
         return false;
     }
 
     @Override
-    public RecordReader<LongWritable, Text> getRecordReader(InputSplit split, JobConf job, Reporter reporter) {
+    public RecordReader<Text, Text> getRecordReader(InputSplit split, JobConf job, Reporter reporter) {
         try {
             return new FullDocRecordReader((FileSplit) split, job);
         }
@@ -34,33 +46,32 @@ public class DocumentInputFormat extends TextInputFormat {
         }
     }
 
+    // with HADOOP-0412, getPos is available as a method call on the class
+    private static Method getPosMethod = null;
+    static {
+        try {
+            getPosMethod = CompressionInputStream.class.getMethod("getPos");
+        } catch (NoSuchMethodException e) {
+        }
+    }
+    
     /**
-     * XMLRecordReader class to read through a given xml document to output xml blocks as records as specified by the start tag
-     * and end tag
+     * FullDocRecordReader class to read an entire document as text.
      * 
      */
-    public static class FullDocRecordReader implements RecordReader<LongWritable, Text> {
+    public class FullDocRecordReader implements RecordReader<Text, Text> {
 
         private final InputStream fsin;
         private final FSDataInputStream rawFsin;
-        private final DataOutputBuffer buffer = new DataOutputBuffer();
         private boolean hasRead = false;
+        private Path file;
 
-        // with HADOOP-0412, getPos is available as a method call on the class
-        private static Method getPosMethod = null;
-        static {
-            try {
-                getPosMethod = CompressionInputStream.class.getMethod("getPos");
-            } catch (NoSuchMethodException e) {
-            }
-        }
-        
         public FullDocRecordReader(FileSplit split, Configuration conf) throws IOException {
-            Path file = split.getPath();
+            file = split.getPath();
             CompressionCodecFactory compressionCodecs = new CompressionCodecFactory(conf);
             final CompressionCodec codec = compressionCodecs.getCodec(file);
             FileSystem fs = file.getFileSystem(conf);
-            rawFsin = fs.open(split.getPath());
+            rawFsin = fs.open(file);
             if (codec == null) {
                 fsin = rawFsin;
             } else {
@@ -69,10 +80,14 @@ public class DocumentInputFormat extends TextInputFormat {
         }
 
         @Override
-        public boolean next(LongWritable key, Text value) throws IOException {
+        public boolean next(Text key, Text value) throws IOException {
             if (hasRead)
                 return false;
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            if (prependKey) {
+                bos.write(file.toString().getBytes());
+                bos.write('<');
+            }
             byte[] chunk=new byte[16*1024];            
             for(;;) {
                 int len = fsin.read(chunk);
@@ -82,7 +97,7 @@ public class DocumentInputFormat extends TextInputFormat {
             }
             
             value.set(bos.toByteArray());
-            key.set(0);
+            key.set(file.toString());
             hasRead = true;
             return true;
         }
@@ -98,8 +113,8 @@ public class DocumentInputFormat extends TextInputFormat {
         }
 
         @Override
-        public LongWritable createKey() {
-            return new LongWritable();
+        public Text createKey() {
+            return new Text();
         }
 
         @Override
