@@ -14,7 +14,7 @@ import org.apache.hadoop.mapred.*;
  * This input format reads an entire file (typically a text document) and emits a single record per file. Useful for processing
  * raw documents as a whole. The input key is the file path and the value is typically the contents of the document.
  * 
- * Set the parameter docinput.prepend.key to "true" to have the format prepend the key followed by a less than character (<)
+ * Set the parameter docinput.prepend.key to a non-empty value to have the format prepend the key followed by this value
  * before the contents of the document as the value. This is mostly useful for Hive, which oddly won't expose keys as part of the
  * data in a row.
  * 
@@ -23,12 +23,11 @@ import org.apache.hadoop.mapred.*;
  */
 @SuppressWarnings("deprecation")
 public class DocumentInputFormat extends FileInputFormat<Text,Text> implements JobConfigurable {
-    private boolean prependKey = false;
+    private String prependKey = null;
     
     @Override
     public void configure(JobConf conf) {
-        String confStr = conf.get("docinput.prepend.key");
-        prependKey = "true".equalsIgnoreCase(confStr);
+        prependKey = conf.get("docinput.prepend.key");
     }
 
     @Override
@@ -84,9 +83,9 @@ public class DocumentInputFormat extends FileInputFormat<Text,Text> implements J
             if (hasRead)
                 return false;
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            if (prependKey) {
+            if (prependKey!=null && !prependKey.isEmpty()) {
                 bos.write(file.toString().getBytes());
-                bos.write('<');
+                bos.write(prependKey.getBytes());
             }
             byte[] chunk=new byte[16*1024];            
             for(;;) {
